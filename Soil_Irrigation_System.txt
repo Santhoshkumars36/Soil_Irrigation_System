@@ -1,0 +1,147 @@
+#include <ESP8266WiFi.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <DHT.h>
+#include <Fonts/FreeSerif9pt7b.h>
+#include <Fonts/FreeMono9pt7b.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define OLED_RESET -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+
+#define DHTPIN D4 // Pin where the DHT11 is connected
+DHT dht(DHTPIN, DHT11);
+
+String apiKey = "8YD4VDUMO3HC6ZEP"; // Enter your Write API key from ThingSpeak
+const char *ssid = "Santhosh"; // Replace with your WiFi SSID and WPA2 key
+const char *pass = "1234567890";
+const char* server = "api.thingspeak.com";
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+const int AirValue = 790; // You need to replace this value with Value_1
+const int WaterValue = 390; // You need to replace this value with Value_2
+const int SensorPin = A0;
+int soilMoistureValue = 0;
+int soilmoisturepercent = 0;
+int relaypin = D5;
+
+WiFiClient client;
+
+void setup() {
+  Serial.begin(115200); // Open serial port, set the baud rate to 115200 bps
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C); // Initialize with the I2C addr 0x3C (128x64)
+  display.clearDisplay();
+  pinMode(relaypin, OUTPUT);
+
+  dht.begin();
+
+  WiFi.begin(ssid, pass);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+  delay(4000);
+}
+
+void loop() {
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  Serial.print("Humidity: ");
+  Serial.print(h, 0);
+  Serial.println("%");
+  Serial.print("Temperature: ");
+  Serial.print(t, 0);
+  Serial.println("C");
+  delay(100);
+  soilMoistureValue = analogRead(SensorPin); // Put sensor insert into soil
+  soilmoisturepercent = map(soilMoistureValue, AirValue, WaterValue, 0, 100);
+
+  String pumpStatus = "OFF";
+  if (soilmoisturepercent <= 49) {
+    digitalWrite(relaypin, LOW);
+    pumpStatus = "ON";
+    Serial.println("Motor is ON");
+    Serial.println("-------------------");
+  } else if (soilmoisturepercent > 49 && soilmoisturepercent <= 100) {
+    digitalWrite(relaypin, HIGH);
+    pumpStatus = "OFF";
+    Serial.println("Motor is OFF");
+    Serial.println("-------------------");
+  }
+
+  // Display the sensor readings and pump status on the OLED display
+  display.setFont(&FreeMono9pt7b); // Set a custom font
+  display.setTextColor(WHITE);
+
+  if (soilmoisturepercent >= 100) {
+    displayData("Moist:", "100%", h, t, pumpStatus);
+  } else if (soilmoisturepercent <= 0) {
+    displayData("Moist:", "0%", h, t, pumpStatus);
+  } else if (soilmoisturepercent >= 0 && soilmoisturepercent <= 100) {
+    String moistureStr = String(soilmoisturepercent) + "%";
+    displayData("Moist:", moistureStr, h, t, pumpStatus);
+  }
+
+  if (client.connect(server, 80)) { // "184.106.153.149" or api.thingspeak.com
+    String postStr = apiKey;
+    postStr += "&field1=";
+    postStr += String(soilmoisturepercent);
+    postStr += "&field2=";
+    postStr += String(h);
+    postStr += "&field3=";
+    postStr += String(t);
+    postStr += "&field4=";
+    postStr += String(relaypin);
+    postStr += "\r\n\r\n\r\n\r\n";
+
+    client.print("POST /update HTTP/1.1\n");
+    client.print("Host: api.thingspeak.com\n");
+    client.print("Connection: close\n");
+    client.print("X-THINGSPEAKAPIKEY: " + apiKey + "\n");
+    client.print("Content-Type: application/x-www-form-urlencoded\n");
+    client.print("Content-Length: ");
+    client.print(postStr.length());
+    client.print("\n\n");
+    client.print(postStr);
+  }
+  client.stop();
+}
+
+void displayData(String label1, String value1, float h, float t, String pumpStatus) {
+  display.clearDisplay();
+
+  display.setCursor(0, 10); // First line
+  display.setTextSize(1); // Regular size
+  display.print(label1);
+  display.setTextSize(1); // Larger size
+  display.print(value1);
+
+  display.setCursor(0, 24); // Second line
+  display.setTextSize(1); // Regular size
+  display.print("Humid:");
+  display.setTextSize(1); // Larger size
+  display.print(h, 0);
+  display.print("%");
+
+  display.setCursor(0, 36); // Third line
+  display.setTextSize(1); // Regular size
+  display.print("Temp:");
+  display.setTextSize(1); // Larger size
+  display.print(t, 0);
+  display.print("*C");
+
+  display.setCursor(0, 48); // Fourth line
+  display.setTextSize(1); // Regular size
+  display.print("Pump:");
+  display.setTextSize(1); // Larger size
+  display.print(pumpStatus);
+
+  display.display();
+}
